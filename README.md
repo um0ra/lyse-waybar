@@ -31,8 +31,4 @@ It is designed specifically for Waybar or similar status bars.
 
 ## Install
 
-### Arch Linux (AUR)
-```bash
-yay -S lyse-waybar
-# or
-paru -S lyse-waybar
+`curl -sSL https://raw.githubusercontent.com/USER/lyse-waybar/main/install.sh | bash`
