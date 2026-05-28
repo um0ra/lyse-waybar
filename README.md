@@ -31,4 +31,4 @@ It is designed specifically for Waybar or similar status bars.
 
 ## Install
 
-`curl -sSL https://raw.githubusercontent.com/um0ra/lyse-waybar/install.sh | bash`
+`curl -sSL https://raw.githubusercontent.com/um0ra/lyse-waybar/master/install.sh | bash`
