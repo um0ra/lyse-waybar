@@ -4,7 +4,7 @@ https://github.com/snoowfall/lyse
 
 Realtime Waybar lyrics module for Spotify.
 
-<img width="1250" height="901" alt="preview" src="https://github.com/user-attachments/assets/246943a6-0c90-4aea-b67f-9032337c4539" />
+<img width="400" height="28" alt="preview" src="https://github.com/user-attachments/assets/d7492c68-0cb3-4c65-b5c4-b8a195c71d23" />
 
 ---
 
