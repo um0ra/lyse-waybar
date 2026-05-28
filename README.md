@@ -1,5 +1,7 @@
 # lyse-waybar
 
+https://github.com/snoowfall/lyse
+
 Realtime Waybar lyrics module for Spotify.
 
 <img width="1250" height="901" alt="preview" src="https://github.com/user-attachments/assets/246943a6-0c90-4aea-b67f-9032337c4539" />
