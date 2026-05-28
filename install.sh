@@ -10,16 +10,16 @@ WAYBAR_CONFIG="$HOME/.config/waybar/config.jsonc"
 mkdir -p "$INSTALL_DIR"
 
 echo "Downloading lyse..."
-curl -sSL "$REPO/lyse.py" -o "$INSTALL_DIR/lyse"
 
+curl -sSL "$REPO/lyse.py" -o "$INSTALL_DIR/lyse"
 chmod +x "$INSTALL_DIR/lyse"
 
-echo "Installed lyse to $INSTALL_DIR/lyse"
+echo "Installed to $INSTALL_DIR/lyse"
 
-# ---------------- Waybar setup ----------------
+# ---------------- Waybar config ----------------
 
 if [ ! -f "$WAYBAR_CONFIG" ]; then
-    echo "Waybar config not found, skipping setup"
+    echo "Waybar config not found, skipping config step"
     exit 0
 fi
 
@@ -38,8 +38,6 @@ if ! grep -q "custom/lyrics" "$WAYBAR_CONFIG"; then
     }
     {print}
     ' "$WAYBAR_CONFIG" > "$WAYBAR_CONFIG.tmp" && mv "$WAYBAR_CONFIG.tmp" "$WAYBAR_CONFIG"
-
-    echo "Injected custom/lyrics"
 fi
 
 if ! grep -q '"custom/lyrics"' "$WAYBAR_CONFIG"; then
@@ -51,8 +49,6 @@ if ! grep -q '"custom/lyrics"' "$WAYBAR_CONFIG"; then
     }
     {print}
     ' "$WAYBAR_CONFIG" > "$WAYBAR_CONFIG.tmp" && mv "$WAYBAR_CONFIG.tmp" "$WAYBAR_CONFIG"
-
-    echo "Added config block"
 fi
 
 # ---------------- restart waybar ----------------
