@@ -1,47 +1,45 @@
 #!/usr/bin/env python3
 
-# lyse | realtime tui lyrics for your favorite songs, directly in the terminal.
-# make a pr if you have something to share, or suggest cool stuff in discussions
+# lyse-github | Realtime Waybar lyrics module for Spotify.
+
 # https://github.com/snoowfall/lyse 
 
-__version__ = "2.2.2"
-# full rewrite done in 2.0.0 to remove traces of ex-fork code
-# qol updates in 2.1.0
-# stdout piping in 2.1.1 (suggested by u/shadowe1ite) 
-# 2.1.2-2.1.3 fixes 
-# 2.2.0 customizable colors through the json (~/.config/lyse/), thanks hooxoo
-# 2.2.1 mpris fix
-# 2.2.2 another mpris fix
+__version__ = "0.0.1"
 
-import os
-import sys
+#!/usr/bin/env python3
+
 import time
-import threading
-import signal
+import subprocess
 import urllib.request
 import urllib.parse
 import json
 import re
-import subprocess
-import curses
-import argparse
+import os
 import shutil
+import random
 
 LRCLIB_URL = "https://lrclib.net/api/get"
-LRCLIB_FB_URL = "https://lrclib.net/api/search"
-POLL_INTERVAL = 0.25 # :3
-OFFSET_STEP = 0.25
+CACHE_DIR = os.path.expanduser("~/.cache/lyse")
+OUT_FILE = "/tmp/lyse"
 
-CONFIG_DIR  = os.path.expanduser("~/.config/lyse")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
-CACHE_DIR   = os.path.expanduser("~/.cache/lyse")
+
+def cache_file_for(title, artist):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+    def norm(s):
+        return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
+
+    return os.path.join(CACHE_DIR, f"{norm(artist)}_{norm(title)}.json")
 
 
 class poller:
     def _cmd(self, args):
         try:
-            out = subprocess.check_output(["playerctl"] + args, stderr=subprocess.DEVNULL)
-            return out.decode().strip()
+            out = subprocess.check_output(
+                ["playerctl", "--player=spotify"] + args,
+                stderr=subprocess.DEVNULL,
+            )
+            return out.decode(errors="replace").strip()
         except:
             return None
 
@@ -50,16 +48,24 @@ class poller:
         if status not in ("Playing", "Paused"):
             return None
 
-        fmt = "{{title}}|{{artist}}|{{album}}|{{mpris:length}}|{{mpris:trackid}}"
+        sep = "\x1f"
+        fmt = (
+            f"{{{{mpris:trackid}}}}{sep}"
+            f"{{{{title}}}}{sep}"
+            f"{{{{artist}}}}{sep}"
+            f"{{{{album}}}}{sep}"
+            f"{{{{mpris:length}}}}"
+        )
+
         meta = self._cmd(["metadata", "--format", fmt])
         if not meta:
             return None
 
-        parts = meta.split("|", 4)
+        parts = meta.split(sep)
         if len(parts) < 5:
             return None
 
-        title, artist, album, length, track_id = parts
+        trackid, title, artist, album, length = parts
 
         try:
             duration = int(length) / 1_000_000
@@ -67,445 +73,239 @@ class poller:
             duration = 0
 
         try:
-            pos = float(self._cmd(["position"]) or "0")  # playerctl lies sometimes fr
+            pos = float(self._cmd(["position"]) or "0")
         except:
             pos = 0
 
         return {
+            "trackid": trackid,
             "title": title,
             "artist": artist,
             "album": album,
             "duration": duration,
             "progress": pos,
-            "track_id": track_id,
         }
 
 
-class Lyse:
+class LyseDaemon:
     def __init__(self):
         self.poller = poller()
-        self.track = None
         self.lyrics = []
-        self.synced = False
-        self.lock = threading.Lock()
-        self.running = True
-        self._last_id = None
-
-        saved = self._load_settings()
-        self.show_ui         = saved.get("show_ui", True)
-        self.lyrics_centered = saved.get("lyrics_centered", True)
-        self.bold_current    = saved.get("bold_current", True)
-        self.upper_current   = saved.get("upper_current", True)
-        self.double_current  = False
-        self.standout        = False
-        self.dim_inactive    = saved.get("dim_inactive", True)
-        self.offset          = saved.get("offset", 0.0)
-        colors = saved.get("colors", {})
-        self.col_current      = colors.get("current", 231)
-        self.col_ahead_close  = colors.get("ahead_close", 252)
-        self.col_ahead_mid    = colors.get("ahead_mid", 249)
-        self.col_ahead_far    = colors.get("ahead_far", 245)
-        self.col_behind_close = colors.get("behind_close", 243)
-        self.col_behind_mid   = colors.get("behind_mid", 239)
-        self.col_behind_far   = colors.get("behind_far", 237)
-        self.col_bar_filled   = colors.get("bar_filled", 249)
-        self.col_bar_empty    = colors.get("bar_empty", 243)
-        self.col_title        = colors.get("title", 252)
-        self.col_artist       = colors.get("artist", 252)
-        self.col_status       = colors.get("status", 252)
-        
-    def _load_settings(self):
-        try:
-            with open(CONFIG_FILE) as f:
-                return json.load(f)
-        except:
-            return {}
-
-    def _save_settings(self):
-        try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
-            data = {
-                "show_ui": self.show_ui,
-                "lyrics_centered": self.lyrics_centered,
-                "bold_current": self.bold_current,
-                "upper_current": self.upper_current,
-                "double_current": self.double_current,
-                "standout": self.standout,
-                "dim_inactive": self.dim_inactive,
-                "offset": self.offset,
-                "colors": {
-                    "current":      self.col_current,
-                    "ahead_close":  self.col_ahead_close,
-                    "ahead_mid":    self.col_ahead_mid,
-                    "ahead_far":    self.col_ahead_far,
-                    "behind_close": self.col_behind_close,
-                    "behind_mid":   self.col_behind_mid,
-                    "behind_far":   self.col_behind_far,
-                    "bar_filled":   self.col_bar_filled,
-                    "bar_empty":    self.col_bar_empty,
-                    "title":        self.col_title,
-                    "artist":       self.col_artist,
-                    "status":       self.col_status,
-                },
-            }
-            with open(CONFIG_FILE, "w") as f:
-                json.dump(data, f, indent=2)
-        except:
-            pass
-
-    def _fetch_lyrics(self, title, artist, album="", duration=0):
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        key = re.sub(r"[^\w]+", "_", f"{artist}_{title}").strip("_").lower()
-        cache_file = os.path.join(CACHE_DIR, f"{key}.json")
-    
-        try:
-            with open(cache_file) as f:
-                data = json.load(f)
-            if data.get("synced"):
-                return self._parse_lrc(data["lyrics"]), True
-            else:
-                return [(0, l) for l in data["lyrics"].splitlines()], False
-        except FileNotFoundError:
-            pass
-        except json.JSONDecodeError:
-            try: os.remove(cache_file)
-            except: pass
-    
-        def _save_and_return(lyrics_text, synced):
-                if duration > 0:
-                    with open(cache_file, "w") as f:
-                        json.dump({"synced": synced, "lyrics": lyrics_text}, f)
-                if synced:
-                    return self._parse_lrc(lyrics_text), True
-                return [(0, l) for l in lyrics_text.splitlines()], False
-    
-        def _best_from_results(results):
-            for entry in results:
-                if entry.get("syncedLyrics"):
-                    return entry["syncedLyrics"], True
-            for entry in results:
-                if entry.get("plainLyrics"):
-                    return entry["plainLyrics"], False
-            return None, False
-            
-        params = urllib.parse.urlencode({
-            "track_name": title,
-            "artist_name": artist,
-            "album_name": album,
-            "duration": int(duration),
-        })
-        try:
-            with urllib.request.urlopen(f"{LRCLIB_URL}?{params}", timeout=6) as req:
-                data = json.loads(req.read())
-            if lrc := data.get("syncedLyrics"):
-                return _save_and_return(lrc, True)
-            if plain := data.get("plainLyrics"):
-                return _save_and_return(plain, False)
-        except:
-            pass
-    
-        # new fallback so it might find some shit for some songs
-        params = urllib.parse.urlencode({"q": f"{artist} {title}"})
-        try:
-            with urllib.request.urlopen(f"{LRCLIB_FB_URL}?{params}", timeout=6) as req:
-                results = json.loads(req.read())
-            lrc, synced = _best_from_results(results)
-            if lrc:
-                return _save_and_return(lrc, synced)
-        except:
-            pass
-    
-        return [(0, "no lyrics :(")], False
-        
-    def _parse_lrc(self, lrc):
-        lines = []
-        for line in lrc.splitlines():
-            if m := re.match(r"\[(\d+):(\d+\.\d+)\](.*)", line):
-                mins = int(m.group(1))
-                secs = float(m.group(2))
-                text = m.group(3).strip() or "♪"
-                lines.append((mins * 60 + secs, text))
-        return sorted(lines)
-
-    def _poll(self): # should be fixed to support everything now idk
-        while self.running:
-            track = self.poller.now_playing()
-            with self.lock:
-                prev_track = self.track
-                self.track = track
-                if track:
-                    id_changed      = track["track_id"] and track["track_id"] != self._last_id
-                    title_changed   = track["title"] != (prev_track or {}).get("title")
-                    duration_fixed  = track["duration"] > 0 and (prev_track or {}).get("duration", 0) == 0
-                    
-                    if id_changed or title_changed or (self._last_id == track["track_id"] and duration_fixed):
-                        self._last_id = track["track_id"]
-                        self.lyrics = [(0, "loading lyrics, hang on")]
-                        self.synced = False
-                        t = track.copy()
-                        def _do_fetch(t=t):
-                            lyrics, synced = self._fetch_lyrics(t["title"], t["artist"], t["album"], t["duration"])
-                            with self.lock:
-                                if self._last_id == t["track_id"] or self.track and self.track["title"] == t["title"]:
-                                    self.lyrics = lyrics
-                                    self.synced = synced
-                        threading.Thread(target=_do_fetch, daemon=True).start()
-            time.sleep(POLL_INTERVAL)
-
-    def _apply_colors(self, scr):
-        if curses.COLORS < 8:
-            for i in range(1, 8):
-                curses.init_pair(i, curses.COLOR_WHITE, -1)
-            return
-    
-        curses.init_pair(1, self.col_current, -1)
-        curses.init_pair(2, self.col_ahead_close, -1)
-        curses.init_pair(3, self.col_ahead_mid, -1)
-        curses.init_pair(4, self.col_ahead_far, -1)
-        curses.init_pair(5, self.col_behind_close, -1)
-        curses.init_pair(6, self.col_behind_mid, -1)
-        curses.init_pair(7, self.col_behind_far, -1)
-        curses.init_pair(8, self.col_bar_filled, -1)
-        curses.init_pair(9, self.col_bar_empty, -1)
-        curses.init_pair(10, self.col_title, -1)
-        curses.init_pair(11, self.col_artist, -1)
-        curses.init_pair(12, self.col_status, -1)
-
-    def _place_line(self, text, width):
-        if self.lyrics_centered:
-            x = max(0, (width - len(text)) // 2)
-        else:
-            x = 0
-        return x, text[:width - x - 1 or 1]
+        self.last_song = None
+        self.loading = False
+        self.last_output = ""
 
     def run(self):
-        threading.Thread(target=self._poll, daemon=True).start()
-        curses.wrapper(self._main_loop)
-
-    def run_pipe_mode(self, live=False):
-        self.offset = self._load_settings().get("offset", 0.0)  # probably will help someone someday
-        track = self.poller.now_playing()
-        if not track:
-            print("No track playing", file=sys.stderr)
-            sys.exit(1)
-    
-        self.lyrics, self.synced = self._fetch_lyrics(
-            track["title"], track["artist"], track["album"], track["duration"]
-        )
-    
-        if live:
-            last_line = None
+        while True:
             try:
-                while True:
-                    track = self.poller.now_playing()
-                    if not track:
-                        if last_line is not None:   
-                            print("nothing playing")
-                            sys.stdout.flush()
-                            last_line = None
-                        time.sleep(2)
-                        continue
-    
-                    progress = track["progress"] + self.offset
-                    current = self._get_current_lyric(progress)
-    
-                    if current != last_line:
-                        print(current)
-                        sys.stdout.flush()
-                        last_line = current
-    
-                    time.sleep(0.8)
-            except KeyboardInterrupt:
-                print("\nStopped", file=sys.stderr)
-        else: # oneshot as in the game oneshot
-            progress = track["progress"] + self.offset
-            current = self._get_current_lyric(progress)
-            print(current)
+                track = self.poller.now_playing()
 
-    def _get_current_lyric(self, progress):
+                if not track:
+                    self._write("")
+                    time.sleep(1)
+                    continue
+
+                song_id = track["trackid"]
+                title = track["title"] or ""
+                artist = track["artist"] or ""
+
+                if "instrumental" in title.lower():
+                    self._write("instrumental!")
+                    time.sleep(1)
+                    continue
+
+                if song_id != self.last_song:
+                    self.last_song = song_id
+                    self.lyrics = []
+                    self.loading = True
+
+                    cached = self._load_cache(title, artist)
+
+                    if cached:
+                        self.lyrics = cached
+                        self.loading = False
+                    else:
+                        self._write("getting lyrics...")
+                        self._fetch(track)
+
+                if not self.loading:
+                    self._write(self._get_line(track["progress"]))
+
+                time.sleep(0.5)
+
+            except:
+                self.loading = False
+                self.lyrics = []
+                self._write("ERR")
+                time.sleep(1)
+
+    def _write(self, text):
+        if text is None:
+            text = ""
+
+        text = text.strip()
+
+        if text == self.last_output:
+            return
+
+        self.last_output = text
+
+        try:
+            with open(OUT_FILE, "w") as f:
+                f.write(text)
+        except:
+            pass
+
+    def _load_cache(self, title, artist):
+        path = cache_file_for(title, artist)
+
+        try:
+            with open(path) as f:
+                data = json.load(f)
+
+            return [(float(ts), t) for ts, t in data.get("lyrics", [])]
+        except:
+            return None
+
+    def _save_cache(self, title, artist, lyrics):
+        path = cache_file_for(title, artist)
+
+        try:
+            with open(path, "w") as f:
+                json.dump(
+                    {"lyrics": [[ts, text] for ts, text in lyrics]},
+                    f,
+                )
+        except:
+            pass
+
+    def _fetch(self, track):
+        try:
+            def query(use_album=True):
+                params = {
+                    "track_name": track["title"],
+                    "artist_name": track["artist"],
+                    "duration": int(track["duration"]),
+                }
+
+                if use_album:
+                    params["album_name"] = track["album"]
+
+                url = f"{LRCLIB_URL}?{urllib.parse.urlencode(params)}"
+
+                with urllib.request.urlopen(url, timeout=8) as r:
+                    return json.loads(r.read())
+
+            def collect(data):
+                out = []
+
+                if isinstance(data, list):
+                    for e in data:
+                        self._collect(e, out)
+                elif isinstance(data, dict):
+                    self._collect(data, out)
+
+                return out
+
+            data = query(True)
+            candidates = collect(data)
+
+            if not candidates:
+                data = query(False)
+                candidates = collect(data)
+
+            if not candidates:
+                self.loading = False
+                self.lyrics = []
+                self._write("")
+                return
+
+            scored = []
+
+            for entry, lyrics in candidates:
+                score = self._score(entry, track)
+                scored.append((score, lyrics))
+
+            best = max(s[0] for s in scored)
+            pool = [x for x in scored if abs(x[0] - best) < 1e-6]
+
+            _, lyrics = random.choice(pool)
+
+            self.lyrics = lyrics
+            self.loading = False
+
+            self._save_cache(track["title"], track["artist"], lyrics)
+
+        except:
+            self.loading = False
+            self.lyrics = []
+            self._write("ERR")
+
+    def _collect(self, entry, out):
+        lrc = entry.get("syncedLyrics")
+        if not lrc:
+            return
+
+        parsed = self._parse_lrc(lrc)
+        if parsed:
+            out.append((entry, parsed))
+
+    def _score(self, entry, track):
+        def norm(s):
+            return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+        def sim(a, b):
+            from difflib import SequenceMatcher
+            return SequenceMatcher(None, norm(a), norm(b)).ratio()
+
+        t = entry.get("trackName") or ""
+        a = entry.get("artistName") or ""
+        d = entry.get("duration") or 0
+
+        ts = sim(track["title"], t)
+        as_ = sim(track["artist"], a)
+
+        ds = 0
+        if track["duration"] and d:
+            diff = abs(track["duration"] - float(d))
+            ds = max(0.0, 1.0 - diff / max(track["duration"], 1))
+
+        return ts * 0.55 + as_ * 0.4 + ds * 0.05
+
+    def _parse_lrc(self, lrc):
+        out = []
+
+        for line in lrc.splitlines():
+            matches = re.findall(r"\[(\d+):(\d+\.?\d*)\]", line)
+            if not matches:
+                continue
+
+            text = re.sub(r"\[.*?\]", "", line).strip() or "♪"
+
+            for m in matches:
+                out.append((int(m[0]) * 60 + float(m[1]), text))
+
+        return sorted(out)
+
+    def _get_line(self, progress):
         if not self.lyrics:
-            return "No lyrics"
-    
-        if not self.synced:
-            return " | ".join(text for _, text in self.lyrics) or "No lyrics"
-    
-        current = "♪"
+            return ""
+
+        cur = "♪"
         for ts, text in self.lyrics:
             if ts > progress:
                 break
-            current = text
-        return current.strip() or "♪"
-    
-    def _main_loop(self, scr):
-        curses.curs_set(0)
-        curses.start_color()
-        curses.use_default_colors()
-        scr.nodelay(True)
-        scr.timeout(80)
-        self._apply_colors(scr)
+            cur = text
 
-        while self.running:
-            key = scr.getch()
-
-            if key in (ord('q'), ord('Q'), 27):
-                break
-
-            if key == ord('k'):
-                self.offset = round(self.offset + OFFSET_STEP, 2)
-                self._save_settings()
-            if key == ord('j'):
-                self.offset = round(self.offset - OFFSET_STEP, 2)
-                self._save_settings()
-
-            if key == ord('u'):
-                self.show_ui = not self.show_ui
-                self._save_settings()
-            if key == ord('c'):
-                self.lyrics_centered = not self.lyrics_centered
-                self._save_settings()
-            if key == ord('b'):
-                self.bold_current = not self.bold_current
-                self._save_settings()
-            if key == ord('U'):
-                self.upper_current = not self.upper_current
-                self._save_settings()
-            if key == ord('i'):
-                self.dim_inactive = not self.dim_inactive
-                self._save_settings()
-
-            if key == curses.KEY_RIGHT:
-                subprocess.Popen(["playerctl", "position", f"{5}+"], stderr=subprocess.DEVNULL)
-            if key == curses.KEY_LEFT:
-                subprocess.Popen(["playerctl", "position", f"{5}-"], stderr=subprocess.DEVNULL)
-
-            with self.lock:
-                track  = self.track
-                lyrics = list(self.lyrics)
-                synced = self.synced
-                offset = self.offset
-
-            h, w = scr.getmaxyx()
-            scr.erase()
-
-            if not track:
-                idles = [
-                    "nothing playing",
-                    "no tunes rn",
-                    "silence is golden",
-                    "playerctl ghosted me again",
-                    "where are the tunes"
-                ]
-                msg = idles[(int(time.time()) // 5) % len(idles)]
-                scr.addstr(h//2, max(0, (w - len(msg))//2), msg, curses.A_DIM)
-                scr.refresh()
-                time.sleep(0.5)
-                continue
-
-            lyric_start = 0
-            if self.show_ui:
-                title  = track['title'] or "Unknown Title"
-                artist = f" - {track['artist']}" if track['artist'] else ""
-                status = f"offset {offset:+.2f}s  q=quit"
-
-                status_x = max(20, w - len(status) - 2)
-
-                title_x = 2
-                scr.addstr(0, title_x, title,  curses.color_pair(10) | curses.A_BOLD)
-                if artist and title_x + len(title) + len(artist) < status_x - 2:
-                    scr.addstr(0, title_x + len(title), artist, curses.color_pair(11) | curses.A_DIM)
-
-                scr.addstr(0, status_x, status, curses.color_pair(12) | curses.A_DIM)
-
-                bar_left = 2
-                bar_w    = w - 4          
-                bar_w    = max(1, w - 4) 
-                                
-                prog = track["progress"]
-                dur  = track["duration"] or 1
-                filled_w = int(bar_w * min(prog / dur, 1))
-                                
-                bar_filled   = "━" * filled_w
-                bar_unfilled = "━" * (bar_w - filled_w)
-                                
-                scr.addstr(1, bar_left, bar_filled,   curses.color_pair(8))
-                if bar_unfilled:
-                    scr.addstr(1,bar_left + filled_w, bar_unfilled, curses.color_pair(9) | curses.A_DIM)
-                                
-                lyric_start = 3
-                
-            progress = track["progress"] + offset
-            cur_idx = 0
-            if synced:
-                for i, (ts, _) in enumerate(lyrics):
-                    if ts <= progress:
-                        cur_idx = i
-
-            area_h = h - lyric_start
-            half   = area_h // 2 + 1
-            # half   = area_h // 2 for absolute center
-            start  = max(0, cur_idx - half)
-            end    = min(len(lyrics), start + area_h)
-            start  = max(0, end - area_h)
-
-            for row, idx in enumerate(range(start, end)):
-                if lyric_start + row >= h - 1:
-                    break
-                ts, text = lyrics[idx]
-                dist = idx - cur_idx if synced else 0
-
-                if not synced:
-                    line = f"  {text}"
-                    attr = curses.color_pair(1)
-                else:
-                    if dist == 0:
-                        label = text.upper() if self.upper_current else text
-                        line = f" ❯ {label}"
-                        attr = curses.color_pair(1) | (curses.A_BOLD if self.bold_current else 0)
-                    elif dist > 0:
-                        line = f"  {text}"
-                        if self.dim_inactive:
-                            attr = curses.color_pair(2 if dist == 1 else 3 if dist <= 3 else 4)
-                        else:
-                            attr = curses.color_pair(1) # forgot to add these back in previously lolz
-                    else:
-                        line = f"  {text}"
-                        if self.dim_inactive:
-                            attr = curses.color_pair(5 if dist == -1 else 6 if dist >= -3 else 7)
-                        else:
-                            attr = curses.color_pair(1)
-
-                x, clipped = self._place_line(line, w)
-                scr.addstr(lyric_start + row, x, clipped, attr)
-
-            scr.refresh()
+        return cur.strip() or "♪"
 
 
 def main():
     if not shutil.which("playerctl"):
-        print("playerctl not found, install it first")
-        sys.exit(1)
-
-    parser = argparse.ArgumentParser(description="Lyse - terminal lyrics viewer")
-    parser.add_argument('--reset', action='store_true', help="Reset settings")
-    parser.add_argument('--pipe', action='store_true', help="Output current lyrics to stdout (non-interactive)")
-    parser.add_argument('--live', action='store_true', help="With --pipe: continuously update stdout")
-    args = parser.parse_args() 
-
-    if args.reset:
-        try:
-            os.remove(CONFIG_FILE)
-            print("config nuked")
-        except:
-            print("no config found")
+        print("playerctl not found")
         return
-        
-    if args.pipe:
-        lyse = Lyse()
-        lyse.run_pipe_mode(live=args.live)
-        return
-    
-    signal.signal(signal.SIGINT, lambda *a: sys.exit(0))
-    Lyse().run()
+
+    LyseDaemon().run()
 
 
 if __name__ == "__main__":
