@@ -22,6 +22,14 @@ It is designed specifically for Waybar or similar status bars.
 
 ---
 
+## Usage / Config
+
+No setup required. The script runs automatically as a Waybar custom module once install script is ran.
+
+You can adjust how often lyrics update by changing the interval in your Waybar config under custom/lyrics interval.
+
+---
+
 ## Requirements
 
 - `python 3`
