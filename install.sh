@@ -43,7 +43,7 @@ fi
 if ! grep -q '"custom/lyrics"' "$WAYBAR_CONFIG"; then
     awk '
     /}/ {
-        print "    ,\"custom/lyrics\": {\"exec\": \"cat /tmp/lyse\", \"interval\": 0.5}";
+        print "    ,\"custom/lyrics\": {\"exec\": \"~/.local/bin/lyse\", \"return-type\": \"json\", \"interval\": 0.3, \"format\": \"{text}\"}";
         print;
         next;
     }
